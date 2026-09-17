@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 from typing import Any
 
@@ -8,8 +7,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from src.camera_component import perfectcorp_camera
-from src.perfectcorp_api import PerfectCorpError, run_skin_analysis, output_items
+from src.skin_api import SkinAPIError, output_items, run_skin_analysis
 
 
 st.set_page_config(
@@ -69,20 +67,12 @@ st.markdown(
 
 def get_api_key() -> str | None:
     try:
-        value = st.secrets.get("PERFECTCORP_API_KEY")
+        value = st.secrets.get("SKIN_API_KEY")
         if value:
             return str(value)
     except Exception:
         pass
-    return os.getenv("PERFECTCORP_API_KEY") or None
-
-
-def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
-    if not data_url.startswith("data:"):
-        raise ValueError("Camera returned an invalid image.")
-    header, encoded = data_url.split(",", 1)
-    mime = header.split(";")[0].replace("data:", "") or "image/jpeg"
-    return base64.b64decode(encoded), mime
+    return os.getenv("SKIN_API_KEY") or None
 
 
 def concern_title(name: str) -> str:
@@ -107,9 +97,9 @@ def score_number(item: dict[str, Any]) -> float | None:
         return float(value)
 
     regional = []
-    for value in item.values():
-        if isinstance(value, dict):
-            candidate = value.get("ui_score")
+    for child in item.values():
+        if isinstance(child, dict):
+            candidate = child.get("ui_score")
             if isinstance(candidate, (int, float)):
                 regional.append(float(candidate))
     return sum(regional) / len(regional) if regional else None
@@ -126,15 +116,13 @@ def score_cards(items: list[dict[str, Any]]):
             raw_text = (
                 f"Raw: {float(raw):.2f}"
                 if isinstance(raw, (int, float))
-                else "Perfect Corp score"
+                else "AI score"
             )
             with col:
                 st.markdown(
                     f"""
                     <div class="score-card">
-                      <div class="score-name">
-                        {concern_title(str(item.get("type","")))}
-                      </div>
+                      <div class="score-name">{concern_title(str(item.get("type", "")))}</div>
                       <div class="score-value">{score:.0f}</div>
                       <div class="score-raw">{raw_text}</div>
                     </div>
@@ -150,9 +138,7 @@ def collect_mask_urls(item: dict[str, Any]) -> list[str]:
         if isinstance(value, dict):
             for key, child in value.items():
                 if key == "mask_urls" and isinstance(child, list):
-                    found.extend(
-                        str(url) for url in child if isinstance(url, str)
-                    )
+                    found.extend(str(url) for url in child if isinstance(url, str))
                 else:
                     walk(child)
         elif isinstance(value, list):
@@ -171,7 +157,6 @@ def show_masks(items: list[dict[str, Any]]):
             masks.append((title, url))
 
     if not masks:
-        st.info("No detection-mask URLs were returned for this result.")
         return
 
     st.subheader("Detection maps")
@@ -181,13 +166,9 @@ def show_masks(items: list[dict[str, Any]]):
             try:
                 response = requests.get(url, timeout=20)
                 response.raise_for_status()
-                st.image(
-                    response.content,
-                    caption=title,
-                    use_container_width=True,
-                )
+                st.image(response.content, caption=title, use_container_width=True)
             except Exception:
-                st.caption(f"{title}: result image unavailable")
+                st.caption(f"{title}: image unavailable")
 
 
 st.markdown(
@@ -195,85 +176,55 @@ st.markdown(
     <div class="hero">
       <h1>AI Skin Analysis</h1>
       <p>
-        Guided capture with Perfect Corp Camera Kit, then server-side
-        Skin Analysis API processing. This is cosmetic image analysis,
-        not a medical diagnosis.
+        Capture or upload a clear selfie, then analyze skin concerns and
+        view scores and detection maps. Cosmetic image analysis only.
       </p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-api_key = get_api_key()
-if not api_key:
-    st.warning(
-        "Add `PERFECTCORP_API_KEY` to `.streamlit/secrets.toml` "
-        "or your deployment environment."
-    )
-
 with st.sidebar:
-    st.header("Capture settings")
-    quality_mode = st.radio(
-        "Analysis quality",
-        ["Standard", "HD"],
-        index=0,
-    )
-    quality_level = st.selectbox(
-        "Camera quality checks",
-        ["relaxed", "moderate", "strict"],
-        index=1,
-    )
-    video_quality = st.selectbox(
-        "Camera output",
-        ["720p", "1080p", "1920p"],
-        index=1 if quality_mode == "Standard" else 2,
-    )
+    st.header("Analysis settings")
+    quality_mode = st.radio("Analysis quality", ["Standard", "HD"], index=0)
 
 hd = quality_mode == "HD"
-camera_mode = "hdskincare" if hd else "skincare"
+api_key = get_api_key()
 
 camera_tab, upload_tab = st.tabs(["Camera", "Upload"])
-
-image_bytes = None
-image_mime = "image/jpeg"
-image_name = "perfectcorp_camera.jpg"
+selected_file = None
 
 with camera_tab:
-    camera_result = perfectcorp_camera(
-        mode=camera_mode,
-        quality_level=quality_level,
-        video_quality=video_quality,
-        key="skin_camera",
+    camera_file = st.camera_input(
+        "Take a clear front-facing photo",
+        help="Use even lighting and keep your full face visible.",
     )
-
-    capture = getattr(camera_result, "capture", None)
-    if capture and capture.get("image"):
-        try:
-            image_bytes, image_mime = data_url_to_bytes(capture["image"])
-            st.success(
-                f"Captured {capture.get('width','?')} × "
-                f"{capture.get('height','?')}."
-            )
-            st.image(image_bytes, caption="Captured selfie", width=340)
-        except Exception as exc:
-            st.error(f"Could not read captured image: {exc}")
+    if camera_file is not None:
+        selected_file = camera_file
+        st.caption("Photo ready for analysis.")
 
 with upload_tab:
-    uploaded = st.file_uploader(
-        "Upload a front-facing selfie",
+    upload_file = st.file_uploader(
+        "Upload a selfie",
         type=["jpg", "jpeg", "png"],
     )
-    if uploaded:
-        image_bytes = uploaded.getvalue()
-        image_mime = uploaded.type or "image/jpeg"
-        image_name = uploaded.name
-        st.image(image_bytes, caption="Uploaded selfie", width=340)
+    if upload_file is not None:
+        selected_file = upload_file
+
+if selected_file is not None:
+    image_bytes = selected_file.getvalue()
+    image_name = getattr(selected_file, "name", "skin_scan.jpg") or "skin_scan.jpg"
+    image_type = getattr(selected_file, "type", "image/jpeg") or "image/jpeg"
+    st.image(image_bytes, caption="Selected image", width=340)
+else:
+    image_bytes = None
+    image_name = "skin_scan.jpg"
+    image_type = "image/jpeg"
 
 st.markdown(
     """
     <div class="notice">
-      Use even lighting and keep the full face visible. For HD mode,
-      the camera must meet Perfect Corp's higher resolution requirement.
+      Use even lighting, avoid filters, and keep only one face in the image.
     </div>
     """,
     unsafe_allow_html=True,
@@ -282,39 +233,50 @@ st.markdown(
 analyze = st.button(
     "Analyze skin",
     type="primary",
-    disabled=not (api_key and image_bytes),
+    disabled=image_bytes is None,
     use_container_width=True,
 )
 
-if analyze and api_key and image_bytes:
-    progress = st.progress(0, text="Preparing image…")
-
-    def on_poll(attempt: int, status: str):
-        progress.progress(
-            min(90, 25 + attempt * 8),
-            text=f"Perfect Corp analysis: {status}…",
+if analyze:
+    if not api_key:
+        st.error(
+            "The server API key is not configured. Add `SKIN_API_KEY` to your "
+            "deployment variables or `.streamlit/secrets.toml`, then try again."
         )
+    elif image_bytes is None:
+        st.warning("Take or upload a photo first.")
+    else:
+        progress = st.progress(5, text="Preparing image…")
 
-    try:
-        progress.progress(10, text="Uploading securely…")
-        result = run_skin_analysis(
-            api_key,
-            image_bytes,
-            hd=hd,
-            filename=image_name,
-            content_type=image_mime,
-            on_poll=on_poll,
-        )
-        progress.progress(100, text="Analysis complete")
-        st.session_state["perfectcorp_result"] = result
-    except PerfectCorpError as exc:
-        progress.empty()
-        st.error(str(exc))
-    except Exception as exc:
-        progress.empty()
-        st.error(f"Unexpected error: {type(exc).__name__}: {exc}")
+        def on_poll(attempt: int, status: str):
+            progress.progress(
+                min(92, 25 + attempt * 7),
+                text=f"Analyzing: {status}…",
+            )
 
-result = st.session_state.get("perfectcorp_result")
+        try:
+            progress.progress(12, text="Uploading image…")
+            result = run_skin_analysis(
+                api_key,
+                image_bytes,
+                hd=hd,
+                filename=image_name,
+                content_type=image_type,
+                on_poll=on_poll,
+            )
+            progress.progress(100, text="Analysis complete")
+            st.session_state["skin_analysis_result"] = result
+        except SkinAPIError as exc:
+            progress.empty()
+            st.error(str(exc))
+        except requests.RequestException as exc:
+            progress.empty()
+            st.error(f"Network error: {exc}")
+        except Exception as exc:
+            progress.empty()
+            st.error(f"Unexpected error: {type(exc).__name__}: {exc}")
+
+result = st.session_state.get("skin_analysis_result")
 if result:
     items = output_items(result)
 
@@ -323,8 +285,7 @@ if result:
 
     if items:
         score_cards(items)
-
-        table_rows = [
+        rows = [
             {
                 "Concern": concern_title(str(item.get("type", ""))),
                 "UI score": score_number(item),
@@ -332,16 +293,10 @@ if result:
             }
             for item in items
         ]
-        st.dataframe(
-            pd.DataFrame(table_rows),
-            hide_index=True,
-            use_container_width=True,
-        )
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
         show_masks(items)
     else:
-        st.warning(
-            "The task completed, but `results.output` was not found."
-        )
+        st.warning("The analysis finished, but no result items were returned.")
 
-    with st.expander("Raw API response"):
+    with st.expander("Technical response"):
         st.json(result)
