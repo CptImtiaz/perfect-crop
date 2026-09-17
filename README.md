@@ -1,16 +1,44 @@
 # AI Skin Analysis — Streamlit
 
-A simple Streamlit app for selfie-based skin analysis.
+A Streamlit app for selfie-based skin analysis with the same mobile-first visual style as the `skinscan` project.
+
+## UI
+
+The app now follows the SkinScan flow:
+
+```text
+Camera / Upload
+      ↓
+Guidance cards
+Lighting · Look Straight · Face Position
+      ↓
+Analyze Skin
+      ↓
+Full-screen scanning animation
+      ↓
+Face result + detection overlay
+      ↓
+Right-side concern legend
+      ↓
+Horizontal circular score rail
+```
+
+The result rail is interactive: tap a concern score to switch the displayed detection map and legend.
+
+The reliable built-in Streamlit camera is kept instead of a custom browser camera component, so photo capture and the Analyze Skin button remain simple and stable.
 
 ## Features
 
 - Built-in Streamlit camera capture
 - Image upload fallback
+- SkinScan-style black mobile camera interface
 - Standard and HD analysis modes
-- Skin concern score cards
-- Detection-mask gallery when result images are available
-- Clear API and network error messages
+- Scanning-line animation while the API runs
+- Full-face result viewer
+- Interactive circular skin-concern scores
+- Detection overlays when result masks are returned
 - Server-side API key only
+- Clear API/network error messages
 
 ## Run locally
 
@@ -35,7 +63,7 @@ Then set:
 SKIN_API_KEY = "YOUR_API_KEY"
 ```
 
-For Railway or another host, add the environment variable:
+For Railway or another host:
 
 ```text
 SKIN_API_KEY=YOUR_API_KEY
@@ -43,36 +71,10 @@ SKIN_API_KEY=YOUR_API_KEY
 
 Never commit the real key.
 
-## Analysis flow
-
-```text
-Camera / Upload
-      ↓
-File upload API
-      ↓
-Skin analysis task
-      ↓
-Task polling
-      ↓
-Scores + detection maps
-      ↓
-Streamlit results
-```
-
-## Standard mode
-
-Includes the available standard skin concerns such as wrinkles, pores, texture,
-acne, oiliness, radiance, eye bags, dark spots, dark circles, firmness,
-hydration, redness, tear trough and skin type.
-
-## HD mode
-
-Uses the HD concern set only. Standard and HD concerns are not mixed in the
-same request.
-
 ## Files
 
-- `streamlit_app.py` — app UI and analysis flow
+- `streamlit_app.py` — capture, scan animation, API flow and UI styling
+- `src/result_component.py` — interactive SkinScan-style result viewer
 - `src/skin_api.py` — API upload, task creation and polling
 - `.streamlit/secrets.toml.example` — safe secret template
 - `Dockerfile` — container/Railway deployment
@@ -80,5 +82,4 @@ same request.
 
 ## Notes
 
-This app displays cosmetic image-analysis outputs. It is not a medical
-diagnosis.
+The app displays cosmetic image-analysis outputs. It is not a medical diagnosis.
