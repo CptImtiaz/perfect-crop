@@ -1,4 +1,4 @@
-from src.perfectcorp_api import HD_ACTIONS, SD_ACTIONS, output_items
+from src.skin_api import HD_ACTIONS, SD_ACTIONS, output_items
 
 
 def test_action_sets():
